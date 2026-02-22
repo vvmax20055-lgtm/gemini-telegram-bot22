@@ -114,6 +114,16 @@ def handle_text(message):
 
 if __name__ == '__main__':
     print("Bot started")
-    import threading
-threading.Thread(target=bot.polling, kwargs={"none_stop": True}, daemon=True).start()
+import threading
+import uvicorn
+import os
 
+# 1. Запускаем бота в отдельном фоновом потоке
+bot_thread = threading.Thread(target=bot.polling, kwargs={"none_stop": True}, daemon=True)
+bot_thread.start()
+
+# 2. Запускаем сервер API в основном потоке (он не даст программе закрыться)
+if __name__ == "__main__":
+    # Берем порт из переменной окружения Railway или ставим 8080 по умолчанию
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
