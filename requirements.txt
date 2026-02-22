@@ -4,3 +4,4 @@ requests
 aiohttp
 uvicorn
 fastapi
+requests 
