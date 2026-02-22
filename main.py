@@ -114,4 +114,6 @@ def handle_text(message):
 
 if __name__ == '__main__':
     print("Bot started")
-    bot.polling(none_stop=True)
+    import threading
+threading.Thread(target=bot.polling, kwargs={"none_stop": True}, daemon=True).start()
+
