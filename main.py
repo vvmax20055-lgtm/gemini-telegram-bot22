@@ -5,10 +5,13 @@ import asyncio
 import telebot
 import threading
 import uvicorn
+import google.generativeai as genai
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 
 load_dotenv()
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY")) # Убедись, что этот ключ есть в Railway Variables
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- НАСТРОЙКИ ---
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -29,9 +32,13 @@ async def health_check():
 async def handle_api_logic(user_id: str, request: Request):
     data = await request.json()
     query = data.get("query")
-    # Сюда в будущем можно вставить прямой вызов библиотеки Google Gemini
-    # А пока движок просто подтверждает получение для теста связи
-    return f"Движок обработал запрос: {query}"
+    
+    try:
+        # Отправляем запрос в настоящую нейросеть
+        response = model.generate_content(query)
+        return response.text
+    except Exception as e:
+        return f"Ошибка Gemini: {str(e)}"
 
 # --- 3. ОБРАБОТКА МАРКДАУНА ---
 def escape_markdown(text):
