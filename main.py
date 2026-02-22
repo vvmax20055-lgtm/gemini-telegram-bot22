@@ -10,58 +10,52 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Инициализация
+# Настройки
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 API_KEY = os.getenv('API_KEY')
-# Внутренний адрес для связи внутри Railway
+# Внутренняя связь
 BASE_API_URL = "http://127.0.0.1:8080" 
 
 bot = telebot.TeleBot(TOKEN)
 app = FastAPI()
 
-# --- ДВИЖОК (API) ---
+# --- 1. ДВИЖОК (API) ---
 @app.post("/conversations/{user_id}")
 async def handle_conversation(user_id: str, request: Request):
     data = await request.json()
-    query = data.get("query")
-    return f"Ответ от API: Вы написали '{query}'"
+    query = data.get("query", "")
+    return f"Ответ: Я получил ваш запрос '{query}'"
 
-# --- ОБЛОЧКА (БОТ) ---
-@bot.message_handler(func=lambda message: True)
+# --- 2. ОБЛОЧКА (БОТ) ---
+@bot.message_handler(func=lambda m: True)
 def handle_text(message):
-    # Используем библиотеку requests для простоты, 
-    # чтобы не конфликтовать с потоками asyncio внутри telebot
-    import requests
-    
+    import requests # используем requests, чтобы не конфликтовать с asyncio
     bot.send_chat_action(message.chat.id, 'typing')
     
-    payload = {"query": message.text}
-    headers = {"x-api-key": API_KEY}
-    
     try:
-        response = requests.post(f"{BASE_API_URL}/conversations/{message.from_user.id}", 
-                                 json=payload, headers=headers)
-        if response.status_code == 200:
-            bot.reply_to(message, response.text)
-        else:
-            bot.reply_to(message, "Движок ответил ошибкой.")
+        res = requests.post(
+            f"{BASE_API_URL}/conversations/{message.from_user.id}",
+            json={"query": message.text},
+            headers={"x-api-key": API_KEY},
+            timeout=10
+        )
+        bot.reply_to(message, res.text if res.status_code == 200 else "Ошибка API")
     except Exception as e:
-        bot.reply_to(message, f"Не удалось связаться с движком: {e}")
+        bot.reply_to(message, f"Ошибка связи: {e}")
 
-# --- ЗАПУСК ---
-def run_bot():
-    print("Запускаю поток бота...")
-    bot.remove_webhook() # Очистка перед стартом
+# --- 3. ЗАПУСК ---
+def start_bot():
+    print("--- [ПОТОК БОТА ЗАПУЩЕН] ---")
+    bot.remove_webhook()
     bot.polling(none_stop=True)
 
 if __name__ == "__main__":
-    # 1. Запуск бота в отдельном потоке
-    t = threading.Thread(target=run_bot)
-    t.daemon = True
-    t.start()
+    # Сначала запускаем бота в фоне
+    bot_thread = threading.Thread(target=start_bot, daemon=True)
+    bot_thread.start()
 
-    # 2. Запуск сервера (основной поток)
-    print("Запускаю сервер API...")
+    # Затем запускаем сервер (он заблокирует основной поток и не даст программе закрыться)
+    print("--- [СЕРВЕР API ЗАПУСКАЕТСЯ] ---")
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
     
