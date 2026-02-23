@@ -5,6 +5,7 @@ import asyncio
 import telebot
 import threading
 import uvicorn
+import time
 import google.generativeai as genai
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
@@ -73,9 +74,20 @@ def handle_message(message):
         bot.send_message(message.chat.id, response_text)
 
 # --- 6. ЗАПУСК ВСЕГО ---
+import time # Добавь в импорты наверху
+
 def start_bot():
-    bot.remove_webhook()
-    bot.polling(none_stop=True)
+    while True:
+        try:
+            print("--- [ПОТОК БОТА: ЗАПУСК ПОЛЛИНГА] ---")
+            bot.remove_webhook()
+            # Добавляем таймаут побольше, чтобы он не пугался лагов сети
+            bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            print(f"--- [ПОТОК БОТА: ОШИБКА СЕТИ] --- {e}")
+            time.sleep(5) # Ждем 5 секунд и пробуем снова
+            continue
+
 
 if __name__ == "__main__":
     # Поток бота
