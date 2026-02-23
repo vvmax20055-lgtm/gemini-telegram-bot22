@@ -2,7 +2,6 @@ import os
 import re
 import asyncio
 import logging
-from typing import Optional
 
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -10,7 +9,10 @@ from fastapi import FastAPI, Request, HTTPException
 from telebot.async_telebot import AsyncTeleBot
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -18,8 +20,9 @@ load_dotenv()
 # --- Переменные окружения ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")          # например, https://your-app.up.railway.app
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")  # модель по умолчанию
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # отдельный секрет
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 if not TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не задан")
@@ -27,6 +30,8 @@ if not GOOGLE_API_KEY:
     raise ValueError("GOOGLE_API_KEY не задан")
 if not WEBHOOK_URL:
     raise ValueError("WEBHOOK_URL не задан")
+if not WEBHOOK_SECRET:
+    raise ValueError("WEBHOOK_SECRET не задан")
 
 # --- Инициализация Gemini ---
 genai.configure(api_key=GOOGLE_API_KEY)
@@ -38,7 +43,7 @@ bot = AsyncTeleBot(TOKEN)
 
 
 # ---------------------------
-# Health check для Railway
+# Health check
 # ---------------------------
 @app.get("/")
 async def health():
@@ -49,23 +54,18 @@ async def health():
 # Экранирование MarkdownV2
 # ---------------------------
 def escape_markdown(text: str) -> str:
-    """Экранирует специальные символы MarkdownV2."""
     if not text:
         return "Нет ответа от модели."
-    # Сначала экранируем обратную косую черту
     text = text.replace("\\", "\\\\")
-    # Затем все спецсимволы MarkdownV2
-    markdown_chars = r'[_*[\]()~`>#+\-=|{}.!]'
+    markdown_chars = r'[_*\[\]()~`>#+\-=|{}.!]'
     return re.sub(markdown_chars, lambda m: "\\" + m.group(0), text)
 
 
 # ---------------------------
-# Асинхронный вызов Gemini
+# Вызов Gemini
 # ---------------------------
 async def generate_response(prompt: str) -> str:
-    """Отправляет запрос в Gemini и возвращает текст ответа."""
     try:
-        # Запускаем синхронный вызов в отдельном потоке, чтобы не блокировать event loop
         response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text or "Нет ответа от модели."
     except Exception as e:
@@ -74,11 +74,10 @@ async def generate_response(prompt: str) -> str:
 
 
 # ---------------------------
-# Обработчик команд и текста
+# Команда /start
 # ---------------------------
 @bot.message_handler(commands=['start'])
 async def handle_start(message):
-    """Приветственное сообщение."""
     await bot.send_chat_action(message.chat.id, "typing")
     welcome_text = (
         "Привет! Я бот на базе Gemini.\n"
@@ -87,38 +86,33 @@ async def handle_start(message):
     await bot.send_message(message.chat.id, welcome_text)
 
 
+# ---------------------------
+# Обработка текста
+# ---------------------------
 @bot.message_handler(content_types=["text"])
 async def handle_text(message):
-    """Обработка текстовых сообщений."""
     await bot.send_chat_action(message.chat.id, "typing")
     response_text = await generate_response(message.text)
 
     try:
-        # Пытаемся отправить с MarkdownV2
         await bot.send_message(
             message.chat.id,
             escape_markdown(response_text),
             parse_mode="MarkdownV2"
         )
     except Exception as e:
-        # Если Markdown вызвал ошибку, отправляем без форматирования
-        logger.warning(f"Ошибка отправки с Markdown: {e}. Отправляем без форматирования.")
+        logger.warning(f"Ошибка Markdown: {e}")
         await bot.send_message(message.chat.id, response_text)
 
 
 # ---------------------------
-# Эндпоинт для вебхука Telegram
+# Webhook endpoint
 # ---------------------------
-@app.post(f"/webhook/{TOKEN}")
+@app.post("/webhook")
 async def telegram_webhook(request: Request):
-    """
-    Принимает обновления от Telegram.
-    Проверяет секретный токен в заголовке для безопасности.
-    """
-    # Проверка секретного токена (должен совпадать с тем, что мы установили при регистрации вебхука)
     secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    if secret_token != TOKEN:
-        logger.warning("Попытка доступа с неверным секретным токеном")
+    if secret_token != WEBHOOK_SECRET:
+        logger.warning("Неверный секретный токен")
         raise HTTPException(status_code=403, detail="Forbidden")
 
     data = await request.json()
@@ -128,33 +122,29 @@ async def telegram_webhook(request: Request):
 
 
 # ---------------------------
-# Startup: регистрация вебхука
+# Startup
 # ---------------------------
 @app.on_event("startup")
 async def on_startup():
-    """При запуске приложения удаляем старый вебхук и устанавливаем новый."""
     logger.info("Удаление предыдущего вебхука...")
     await bot.remove_webhook()
 
-    webhook_url = f"{WEBHOOK_URL}/webhook/{TOKEN}"
-    logger.info(f"Установка вебхука на {webhook_url}")
+    webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
+    logger.info(f"Установка вебхука: {webhook_url}")
 
-    # Устанавливаем вебхук с секретным токеном
     result = await bot.set_webhook(
         url=webhook_url,
-        secret_token=TOKEN  # используем сам токен как секрет (можно вынести отдельно)
+        secret_token=WEBHOOK_SECRET
     )
 
     if result:
-        logger.info("Вебхук успешно установлен")
+        logger.info("Вебхук установлен")
     else:
-        logger.error("Не удалось установить вебхук")
-        # Можно добавить дополнительную обработку, например, завершение процесса
         raise RuntimeError("Ошибка установки вебхука")
 
 
 # ---------------------------
-# Точка входа для локального запуска
+# Локальный запуск
 # ---------------------------
 if __name__ == "__main__":
     import uvicorn
