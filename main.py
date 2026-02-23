@@ -7,8 +7,11 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
 from telebot.async_telebot import AsyncTeleBot
+from telebot import apihelper
 
-# Настройка логирования
+# ---------------------------
+# Логирование
+# ---------------------------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -17,11 +20,13 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# --- Переменные окружения ---
+# ---------------------------
+# Переменные окружения
+# ---------------------------
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")  # отдельный секрет
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 if not TOKEN:
@@ -33,11 +38,21 @@ if not WEBHOOK_URL:
 if not WEBHOOK_SECRET:
     raise ValueError("WEBHOOK_SECRET не задан")
 
-# --- Инициализация Gemini ---
+# ---------------------------
+# УВЕЛИЧИВАЕМ ТАЙМАУТЫ TELEGRAM (ВАЖНО)
+# ---------------------------
+apihelper.CONNECT_TIMEOUT = 10
+apihelper.READ_TIMEOUT = 120  # было 30 → из-за этого падало на Railway
+
+# ---------------------------
+# Инициализация Gemini
+# ---------------------------
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel(GEMINI_MODEL)
 
-# --- FastAPI и бот ---
+# ---------------------------
+# FastAPI и бот
+# ---------------------------
 app = FastAPI()
 bot = AsyncTeleBot(TOKEN)
 
@@ -70,7 +85,7 @@ async def generate_response(prompt: str) -> str:
         return response.text or "Нет ответа от модели."
     except Exception as e:
         logger.exception("Ошибка при обращении к Gemini")
-        return f"Ошибка Gemini: {str(e)}"
+        return "Произошла ошибка при обращении к модели."
 
 
 # ---------------------------
@@ -79,11 +94,11 @@ async def generate_response(prompt: str) -> str:
 @bot.message_handler(commands=['start'])
 async def handle_start(message):
     await bot.send_chat_action(message.chat.id, "typing")
-    welcome_text = (
+    await bot.send_message(
+        message.chat.id,
         "Привет! Я бот на базе Gemini.\n"
         "Просто отправь мне любой текст, и я постараюсь ответить."
     )
-    await bot.send_message(message.chat.id, welcome_text)
 
 
 # ---------------------------
@@ -132,15 +147,12 @@ async def on_startup():
     webhook_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
     logger.info(f"Установка вебхука: {webhook_url}")
 
-    result = await bot.set_webhook(
+    await bot.set_webhook(
         url=webhook_url,
         secret_token=WEBHOOK_SECRET
     )
 
-    if result:
-        logger.info("Вебхук установлен")
-    else:
-        raise RuntimeError("Ошибка установки вебхука")
+    logger.info("Вебхук установлен")
 
 
 # ---------------------------
